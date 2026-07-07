@@ -1,8 +1,8 @@
 """
 Endpoints for uploading and inspecting documents.
 
-Phase 1: just accept a file, save it, return basic info.
-(Phase 2 will add the actual forgery-detection logic here.)
+Phase 2: uploads now run through ELA + EXIF forgery analysis before
+being stored, and the response includes a fraud_score and reasons.
 """
 import os
 import uuid
@@ -10,10 +10,18 @@ from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
+from app.services.forgery_detection import analyze_document
+
 router = APIRouter()
 
 UPLOAD_DIR = "app/uploads"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+# PDF forgery analysis (page rasterization) lands in Phase 3 alongside OCR.
+ANALYZABLE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+
+# Thresholds that decide the document's review status based on fraud_score.
+FLAG_THRESHOLD = 50    # >= this -> Flagged for Review
+APPROVE_THRESHOLD = 20  # < this -> Approved automatically
 
 # In-memory "database" for now — Phase 5 will swap this for real SQL storage.
 DOCUMENTS_DB = {}
@@ -43,7 +51,30 @@ async def upload_document(file: UploadFile = File(...)):
         "uploaded_at": datetime.utcnow().isoformat(),
         "status": "Pending",
         "size_bytes": len(contents),
+        "fraud_score": None,
+        "reasons": [],
+        "ela_image": None,
     }
+
+    if ext in ANALYZABLE_EXTENSIONS:
+        report = analyze_document(saved_path, UPLOAD_DIR, doc_id)
+
+        if report.fraud_score >= FLAG_THRESHOLD:
+            status = "Flagged for Review"
+        elif report.fraud_score < APPROVE_THRESHOLD:
+            status = "Approved"
+        else:
+            status = "Pending"
+
+        record.update({
+            "status": status,
+            "fraud_score": report.fraud_score,
+            "reasons": report.reasons,
+            "ela_image": report.ela_image_path,
+        })
+    else:
+        record["reasons"] = ["PDF analysis not yet supported — arrives in Phase 3."]
+
     DOCUMENTS_DB[doc_id] = record
 
     return record

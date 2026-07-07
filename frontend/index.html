@@ -113,7 +113,7 @@
     padding-top: 32px;
   }
 
-  .case-file.active { display: grid; grid-template-columns: 1fr 260px; gap: 28px; }
+  .case-file.active { display: grid; grid-template-columns: 1fr 260px; gap: 28px; align-items: start; }
 
   .doc-preview {
     background: #fff;
@@ -179,6 +179,75 @@
     opacity: 0.5;
   }
 
+  .stamp.approved { border-color: var(--stamp-green); color: var(--stamp-green); }
+  .stamp.approved::after { border-color: var(--stamp-green); }
+  .stamp.flagged { border-color: var(--stamp-red); color: var(--stamp-red); }
+  .stamp.flagged::after { border-color: var(--stamp-red); }
+
+  .score-row {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+
+  .score-bar-track {
+    height: 8px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+
+  .score-bar-fill {
+    height: 100%;
+    background: var(--stamp-amber);
+    transition: width 0.3s ease;
+  }
+
+  .reasons-panel {
+    grid-column: 1 / -1;
+    margin-top: 8px;
+    border-top: 1px solid var(--line);
+    padding-top: 20px;
+  }
+
+  .reasons-panel h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    margin: 0 0 10px;
+  }
+
+  .reason-item {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 10px 12px;
+    background: var(--paper);
+    border-left: 3px solid var(--stamp-amber);
+    border-radius: 2px;
+    margin-bottom: 8px;
+  }
+
+  .ela-preview {
+    grid-column: 1 / -1;
+    margin-top: 8px;
+  }
+
+  .ela-preview img {
+    max-width: 100%;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+
+  .ela-preview .cap {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-top: 6px;
+  }
+
   footer {
     margin-top: 40px;
     font-family: 'IBM Plex Mono', monospace;
@@ -224,7 +293,23 @@
           <div class="meta-row"><span class="k">Filename</span><span class="v" id="metaName">—</span></div>
           <div class="meta-row"><span class="k">Size</span><span class="v" id="metaSize">—</span></div>
           <div class="meta-row"><span class="k">Received</span><span class="v" id="metaTime">—</span></div>
+          <div class="score-row" id="scoreRow" style="display:none;">
+            <span class="k" style="display:block;text-transform:uppercase;letter-spacing:0.05em;font-size:10px;color:var(--ink-soft);margin-bottom:2px;">Fraud Score</span>
+            <span class="v" id="metaScore">—</span>
+            <div class="score-bar-track"><div class="score-bar-fill" id="scoreBarFill" style="width:0%;"></div></div>
+          </div>
           <div class="stamp" id="metaStatus">Pending</div>
+        </div>
+
+        <div class="reasons-panel" id="reasonsPanel" style="display:none;">
+          <h3>Findings</h3>
+          <div id="reasonsList"></div>
+        </div>
+
+        <div class="ela-preview" id="elaPreview" style="display:none;">
+          <h3 style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);margin:0 0 10px;">ELA Overlay</h3>
+          <img id="elaImg" alt="ELA visualization" />
+          <div class="cap">Brighter regions compressed differently than the rest of the document. Text edges naturally show up here too — this is a visual aid for the reviewer, not a verdict on its own.</div>
         </div>
       </div>
     </div>
@@ -299,7 +384,40 @@
     document.getElementById('metaName').textContent = data.original_filename;
     document.getElementById('metaSize').textContent = `${(data.size_bytes / 1024).toFixed(1)} KB`;
     document.getElementById('metaTime').textContent = data.uploaded_at.replace('T', ' ').slice(0, 19) + ' UTC';
-    document.getElementById('metaStatus').textContent = data.status;
+
+    const statusEl = document.getElementById('metaStatus');
+    statusEl.textContent = data.status;
+    statusEl.className = 'stamp';
+    if (data.status === 'Approved') statusEl.classList.add('approved');
+    if (data.status === 'Flagged for Review') statusEl.classList.add('flagged');
+
+    const scoreRow = document.getElementById('scoreRow');
+    if (data.fraud_score !== null && data.fraud_score !== undefined) {
+      scoreRow.style.display = 'block';
+      document.getElementById('metaScore').textContent = `${data.fraud_score} / 100`;
+      const fill = document.getElementById('scoreBarFill');
+      fill.style.width = `${data.fraud_score}%`;
+      fill.style.background = data.fraud_score >= 50 ? 'var(--stamp-red)' : (data.fraud_score < 20 ? 'var(--stamp-green)' : 'var(--stamp-amber)');
+    } else {
+      scoreRow.style.display = 'none';
+    }
+
+    const reasonsPanel = document.getElementById('reasonsPanel');
+    const reasonsList = document.getElementById('reasonsList');
+    if (data.reasons && data.reasons.length) {
+      reasonsPanel.style.display = 'block';
+      reasonsList.innerHTML = data.reasons.map(r => `<div class="reason-item">${r}</div>`).join('');
+    } else {
+      reasonsPanel.style.display = 'none';
+    }
+
+    const elaPreview = document.getElementById('elaPreview');
+    if (data.ela_image) {
+      elaPreview.style.display = 'block';
+      document.getElementById('elaImg').src = `${API_BASE}/uploads/${data.ela_image}`;
+    } else {
+      elaPreview.style.display = 'none';
+    }
   }
 </script>
 </body>

@@ -1,8 +1,11 @@
 """
 Endpoints for uploading and inspecting documents.
 
-Phase 2: uploads now run through ELA + EXIF forgery analysis before
-being stored, and the response includes a fraud_score and reasons.
+Phase 3: adds OCR + NLP consistency checks (content_analysis) alongside the
+Phase 2 image forgery checks (forgery_detection), and combines both into a
+single fraud_score. PDFs now get analyzed too (via OCR), though image-level
+forgery checks (ELA/EXIF) remain image-only since they need pixel data,
+not PDF structure.
 """
 import os
 import uuid
@@ -11,13 +14,13 @@ from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from app.services.forgery_detection import analyze_document
+from app.services.content_analysis import analyze_content
 
 router = APIRouter()
 
 UPLOAD_DIR = "app/uploads"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
-# PDF forgery analysis (page rasterization) lands in Phase 3 alongside OCR.
-ANALYZABLE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 # Thresholds that decide the document's review status based on fraud_score.
 FLAG_THRESHOLD = 50    # >= this -> Flagged for Review
@@ -54,26 +57,45 @@ async def upload_document(file: UploadFile = File(...)):
         "fraud_score": None,
         "reasons": [],
         "ela_image": None,
+        "extracted_text": None,
     }
 
-    if ext in ANALYZABLE_EXTENSIONS:
-        report = analyze_document(saved_path, UPLOAD_DIR, doc_id)
+    reasons: list[str] = []
+    combined_score = 0
+    is_pdf = ext == ".pdf"
 
-        if report.fraud_score >= FLAG_THRESHOLD:
-            status = "Flagged for Review"
-        elif report.fraud_score < APPROVE_THRESHOLD:
-            status = "Approved"
-        else:
-            status = "Pending"
+    # --- Image-level forgery checks (ELA + EXIF) — images only ---
+    if ext in IMAGE_EXTENSIONS:
+        forgery_report = analyze_document(saved_path, UPLOAD_DIR, doc_id)
+        reasons.extend(forgery_report.reasons)
+        combined_score += forgery_report.fraud_score
+        record["ela_image"] = forgery_report.ela_image_path
 
-        record.update({
-            "status": status,
-            "fraud_score": report.fraud_score,
-            "reasons": report.reasons,
-            "ela_image": report.ela_image_path,
-        })
+    # --- Content checks (OCR + NLP) — images and PDFs ---
+    try:
+        content_report = analyze_content(saved_path, is_pdf=is_pdf)
+        reasons.extend(content_report.reasons)
+        combined_score += content_report.content_score
+        record["extracted_text"] = content_report.extracted_text
+    except Exception as e:
+        # OCR failing shouldn't take down the whole upload — surface it as
+        # a finding instead so the reviewer knows analysis was incomplete.
+        reasons.append(f"Content analysis could not run: {e}")
+
+    combined_score = min(combined_score, 100)
+
+    if combined_score >= FLAG_THRESHOLD:
+        status = "Flagged for Review"
+    elif combined_score < APPROVE_THRESHOLD:
+        status = "Approved"
     else:
-        record["reasons"] = ["PDF analysis not yet supported — arrives in Phase 3."]
+        status = "Pending"
+
+    record.update({
+        "status": status,
+        "fraud_score": combined_score,
+        "reasons": reasons,
+    })
 
     DOCUMENTS_DB[doc_id] = record
 

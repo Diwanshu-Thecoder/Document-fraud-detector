@@ -1,9 +1,11 @@
-# Document Fraud Detection Pipeline — Phase 1 + 2
+# Document Fraud Detection Pipeline — Phase 1–3
 
 **Phase 1**: upload UI + FastAPI backend storing documents.
-**Phase 2**: every upload now runs through two forgery-detection signals
-(Error Level Analysis + EXIF metadata) and returns a `fraud_score` (0–100),
-a human-readable list of `reasons`, and an ELA visualization image.
+**Phase 2**: image forgery checks — Error Level Analysis (ELA) + EXIF metadata.
+**Phase 3**: OCR (Tesseract) extracts document text; NLP-style rule checks
+flag anachronisms (e.g. a 2021-dated certificate mentioning GPT-4, which
+didn't exist until 2023) and nonsensical dates. Works on images *and* PDFs
+now (PDFs get rasterized page-by-page before OCR).
 
 ## Project structure
 
@@ -15,7 +17,8 @@ fraud-detector/
 │   │   ├── routers/
 │   │   │   └── documents.py               # /api/documents/upload endpoint
 │   │   ├── services/
-│   │   │   └── forgery_detection.py       # ELA + EXIF analysis (Phase 2)
+│   │   │   ├── forgery_detection.py       # ELA + EXIF analysis (Phase 2)
+│   │   │   └── content_analysis.py        # OCR + anachronism/date checks (Phase 3)
 │   │   └── uploads/                       # uploaded files + ELA overlays land here
 │   └── requirements.txt
 └── frontend/
@@ -23,6 +26,19 @@ fraud-detector/
 ```
 
 ## Running it
+
+**0. System dependency — Tesseract OCR** (not a Python package, install separately)
+
+```bash
+# macOS
+brew install tesseract
+
+# Ubuntu/Debian
+sudo apt-get install tesseract-ocr
+
+# Windows: install from https://github.com/UB-Mannheim/tesseract/wiki
+# and make sure the install folder is on your PATH.
+```
 
 **1. Backend**
 
@@ -43,48 +59,55 @@ cd frontend
 python3 -m http.server 8080
 ```
 
-Visit `http://localhost:8080`, drag in a JPG/PNG. You'll see:
+Visit `http://localhost:8080`, drag in a JPG/PNG/PDF. You'll see:
 - A **fraud score** (0–100) with a colored bar (green < 20, amber, red ≥ 50)
 - A **status stamp**: Approved / Pending / Flagged for Review
 - A **findings list** explaining exactly why
-- An **ELA overlay** image you can inspect visually
+- An **ELA overlay** image (images only)
+- The **extracted OCR text** (images and PDFs)
 
 ## How the scoring works
 
-| Signal | Weight | Why |
-|---|---|---|
-| EXIF shows editing software (Photoshop, GIMP, Canva, etc.) | +70 | Direct, reliable evidence — verified in testing |
-| No EXIF metadata at all | +5 | Weak signal — common even in legitimate scans |
-| ELA hotspot (localized compression anomaly) | +15 | See limitation below — kept low-weight on purpose |
+| Signal | Weight | Source | Why |
+|---|---|---|---|
+| EXIF shows editing software | +70 | Phase 2 | Direct, reliable evidence |
+| Anachronism (tech mentioned predates issue date) | +60 | Phase 3 | Specific, verifiable evidence |
+| Future-dated document | +40 | Phase 3 | Logically impossible |
+| No EXIF metadata at all | +5 | Phase 2 | Weak signal, common in legitimate scans |
+| ELA hotspot | +15 | Phase 2 | See limitation below — kept low-weight |
 
+All applicable signals are summed and capped at 100.
 `fraud_score >= 50` → Flagged for Review · `< 20` → Approved · else → Pending.
 
-## Known limitation: ELA and text edges
+## Known limitations
 
-While building this, testing showed that naive Error Level Analysis flags
-**any high-contrast edge** — including completely untampered text and
-borders — not just genuinely edited regions. A clean, never-edited
-certificate and a deliberately tampered one produced similar ELA hotspot
-scores in our tests, because both simply contain printed text.
+**ELA and text edges** (Phase 2): naive Error Level Analysis flags any
+high-contrast edge — including untampered text — not just genuinely edited
+regions. In testing, a clean and a tampered certificate produced similar
+ELA scores because both simply contain printed text. This is a documented
+characteristic of ELA in the forensics literature — strong for spliced
+*photographic* content, weak for flat text-on-white documents. It's
+weighted low here and kept mainly as a visual aid for the reviewer.
 
-This is a documented characteristic of ELA in the forensics literature: it's
-a strong tool for spotting spliced *photographic* content (e.g. a face
-pasted from another photo) but a weak, noisy one for flat text-on-white
-documents. Because of this, ELA is weighted low in the score and its main
-value here is the **visual overlay** — a human reviewer can look at it
-alongside the metadata evidence, rather than trusting a single automated
-number.
+**Anachronism detection is only as good as its reference dictionary**
+(Phase 3): `TECH_RELEASE_DATES` in `content_analysis.py` is a small,
+hand-curated list for demonstration. A document mentioning a real
+anachronism *not* in that dictionary won't be caught. In production this
+would be backed by a maintained database of product/release dates.
 
-This is exactly the gap **Phase 4** (a trained CNN) is meant to close: a
-model trained on labeled tampered/untampered examples can learn to tell a
-normal text edge apart from a spliced one, which hand-written statistical
-rules can't reliably do.
+**OCR accuracy**: Tesseract isn't perfect, especially on stylized fonts or
+low-resolution scans — it occasionally misreads characters (we saw "to" →
+"ta" in testing). This mainly affects date/entity extraction precision,
+which is why date-extraction regex is deliberately permissive.
+
+Both limitations point at the same thing: **Phase 4's trained CNN** exists
+specifically to learn patterns (real tampering vs. normal text edges) that
+hand-written rules can't reliably capture.
 
 ## What's next
 
-- **Phase 3**: OCR (Tesseract/EasyOCR) + NLP consistency checks (e.g. dates,
-  fonts, logical contradictions in the extracted text).
 - **Phase 4**: label a small tampered/untampered image dataset and train a
   CNN to replace/augment the ELA heuristic.
 - **Phase 5**: SQL-backed status persistence + polished reviewer dashboard.
+
 

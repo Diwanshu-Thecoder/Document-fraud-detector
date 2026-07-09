@@ -1,11 +1,12 @@
-# Document Fraud Detection Pipeline — Phase 1–4
+# Document Fraud Detection Pipeline — Phase 1–5 (Complete)
 
 **Phase 1**: upload UI + FastAPI backend storing documents.
 **Phase 2**: image forgery checks — Error Level Analysis (ELA) + EXIF metadata.
 **Phase 3**: OCR (Tesseract) + anachronism/date consistency checks.
 **Phase 4**: a CNN trained from scratch on a synthetic tampered/authentic
-dataset, served as an experimental (non-scoring) signal. See "Phase 4"
-section below for the full story — this one had a real bug hunt in it.
+dataset, served as an experimental (non-scoring) signal.
+**Phase 5**: SQLite persistence (survives restarts) + a reviewer dashboard
+with a manual approve/reject override, layered on top of everything above.
 
 ## Project structure
 
@@ -14,8 +15,10 @@ fraud-detector/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py                        # FastAPI app entry point
+│   │   ├── database.py                    # SQLAlchemy engine/session (Phase 5)
+│   │   ├── models.py                      # Document ORM model (Phase 5)
 │   │   ├── routers/
-│   │   │   └── documents.py               # /api/documents/upload endpoint
+│   │   │   └── documents.py               # upload/list/detail/status-override endpoints
 │   │   ├── services/
 │   │   │   ├── forgery_detection.py       # ELA + EXIF analysis (Phase 2)
 │   │   │   ├── content_analysis.py        # OCR + anachronism checks (Phase 3)
@@ -23,7 +26,8 @@ fraud-detector/
 │   │   ├── ml_models/
 │   │   │   ├── model_def.py               # CNN architecture (must match ml/train.py)
 │   │   │   └── tamper_classifier.pt       # trained weights
-│   │   └── uploads/                       # uploaded files + ELA overlays land here
+│   │   ├── uploads/                       # uploaded files + ELA overlays land here
+│   │   └── fraud_detector.db              # SQLite DB (created on first run, gitignored)
 │   └── requirements.txt
 ├── ml/                                     # training pipeline (separate from the served app)
 │   ├── dataset_generation/
@@ -32,7 +36,7 @@ fraud-detector/
 │   ├── train.py                           # resumable, checkpointed training script
 │   └── models/tamper_classifier.pt        # training output (copied into backend/app/ml_models/)
 └── frontend/
-    └── index.html              # upload UI (plain HTML/CSS/JS, no build step)
+    └── index.html              # Intake + Review Dashboard tabs (plain HTML/CSS/JS, no build step)
 ```
 
 ## Running it
@@ -166,10 +170,36 @@ is a small hand-curated demo list, not a general knowledge base.
 **OCR accuracy**: Tesseract occasionally misreads characters on stylized
 fonts, affecting text-extraction precision.
 
+## Phase 5: persistence + reviewer dashboard
+
+The in-memory dict from Phases 1-4 is gone — documents now live in a real
+SQLite database (`backend/app/fraud_detector.db`, created automatically on
+first run) via SQLAlchemy. Verified this actually persists by uploading a
+document, fully restarting the server process, and confirming a fresh
+`GET /api/documents/` still returned it.
+
+**New endpoints:**
+- `GET /api/documents/?status=Flagged for Review` — list, optionally
+  filtered by status
+- `PATCH /api/documents/{id}/status` — manual reviewer override (body:
+  `{"status": "Approved"}`). Valid values: `Approved`, `Pending`,
+  `Flagged for Review`, `Rejected`. The original score and findings are
+  preserved regardless — they're the evidence a decision was based on, not
+  a verdict to overwrite.
+
+**Dashboard (frontend, "Review Dashboard" tab):** lists every case with
+filename, score, status, and timestamp; filterable by status; click a row
+to open the full case-file detail (same view as Intake — ELA overlay, OCR
+text, CNN probability, findings); Approve / Reject / Re-flag buttons call
+the override endpoint directly and show a "reviewed by a human" tag once
+used.
+
 ## What's next
 
-- **Phase 5**: SQL-backed status persistence + polished reviewer dashboard.
 - Closing the CNN's generalization gap with more diverse training data.
+- Swapping SQLite for Postgres for concurrent multi-reviewer use (the
+  SQLAlchemy layer makes this a connection-string change, not a rewrite).
+- Auth/login so `reviewed_by_human` can record *who* reviewed a case.
 
 
 

@@ -1,23 +1,21 @@
 """
-Endpoints for uploading and inspecting documents.
+Endpoints for uploading, inspecting, and reviewing documents.
 
-Phase 4: adds a CNN tampering classifier (cnn_inference) alongside the
-Phase 2/3 checks. IMPORTANT: the CNN's score is surfaced to the reviewer
-but deliberately NOT included in fraud_score. It scored 95% val accuracy
-on its own synthetic training distribution, but testing on even slightly
-different-looking synthetic documents showed it collapses to predicting
-"tampered" on almost everything — a textbook case of a model that learned
-its narrow training distribution well but doesn't generalize (domain
-shift). See ml/README or backend/app/services/cnn_inference.py for detail.
-An unreliable signal shouldn't get to outvote the more trustworthy
-EXIF/anachronism evidence, so it stays informational-only for now.
+Phase 5: swaps the in-memory dict for real SQL persistence (SQLite via
+SQLAlchemy), and adds a manual review-override endpoint so a human
+reviewer can approve or reject a document regardless of what the
+automated fraud_score said — the model is a triage aid, not a judge.
 """
 import os
+import json
 import uuid
-from datetime import datetime
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.database import get_db, engine, Base
+from app.models import Document
 from app.services.forgery_detection import analyze_document
 from app.services.content_analysis import analyze_content
 from app.services.cnn_inference import classify_tampering
@@ -28,16 +26,33 @@ UPLOAD_DIR = "app/uploads"
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
-# Thresholds that decide the document's review status based on fraud_score.
-FLAG_THRESHOLD = 50    # >= this -> Flagged for Review
-APPROVE_THRESHOLD = 20  # < this -> Approved automatically
+FLAG_THRESHOLD = 50
+APPROVE_THRESHOLD = 20
 
-# In-memory "database" for now — Phase 5 will swap this for real SQL storage.
-DOCUMENTS_DB = {}
+VALID_STATUSES = {"Approved", "Pending", "Flagged for Review", "Rejected"}
+
+Base.metadata.create_all(bind=engine)
+
+
+def _doc_to_dict(doc: Document) -> dict:
+    return {
+        "id": doc.id,
+        "original_filename": doc.original_filename,
+        "stored_filename": doc.stored_filename,
+        "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+        "status": doc.status,
+        "size_bytes": doc.size_bytes,
+        "fraud_score": doc.fraud_score,
+        "reasons": json.loads(doc.reasons_json or "[]"),
+        "ela_image": doc.ela_image,
+        "extracted_text": doc.extracted_text,
+        "cnn_tamper_probability": doc.cnn_tamper_probability,
+        "reviewed_by_human": doc.reviewed_by_human,
+    }
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -53,54 +68,38 @@ async def upload_document(file: UploadFile = File(...)):
     with open(saved_path, "wb") as f:
         f.write(contents)
 
-    record = {
-        "id": doc_id,
-        "original_filename": file.filename,
-        "stored_filename": saved_filename,
-        "uploaded_at": datetime.utcnow().isoformat(),
-        "status": "Pending",
-        "size_bytes": len(contents),
-        "fraud_score": None,
-        "reasons": [],
-        "ela_image": None,
-        "extracted_text": None,
-        "cnn_tamper_probability": None,
-    }
-
     reasons: list[str] = []
     combined_score = 0
     is_pdf = ext == ".pdf"
+    ela_image = None
+    extracted_text = None
+    cnn_prob = None
 
-    # --- Image-level forgery checks (ELA + EXIF) — images only ---
     if ext in IMAGE_EXTENSIONS:
         forgery_report = analyze_document(saved_path, UPLOAD_DIR, doc_id)
         reasons.extend(forgery_report.reasons)
         combined_score += forgery_report.fraud_score
-        record["ela_image"] = forgery_report.ela_image_path
+        ela_image = forgery_report.ela_image_path
 
-        # --- CNN tampering classifier — experimental, does NOT affect score ---
         try:
             cnn_result = classify_tampering(saved_path)
-            record["cnn_tamper_probability"] = cnn_result["tampered_probability"]
+            cnn_prob = cnn_result["tampered_probability"]
             reasons.append(
                 f"[Experimental] CNN classifier estimates "
-                f"{cnn_result['tampered_probability']*100:.0f}% tampering probability. "
-                f"This model was trained/validated only on synthetic data and has NOT "
-                f"been shown to generalize to real documents — informational only, "
-                f"not included in the fraud score."
+                f"{cnn_prob*100:.0f}% tampering probability. This model was "
+                f"trained/validated only on synthetic data and has NOT been "
+                f"shown to generalize to real documents — informational "
+                f"only, not included in the fraud score."
             )
         except Exception as e:
             reasons.append(f"CNN classifier could not run: {e}")
 
-    # --- Content checks (OCR + NLP) — images and PDFs ---
     try:
         content_report = analyze_content(saved_path, is_pdf=is_pdf)
         reasons.extend(content_report.reasons)
         combined_score += content_report.content_score
-        record["extracted_text"] = content_report.extracted_text
+        extracted_text = content_report.extracted_text
     except Exception as e:
-        # OCR failing shouldn't take down the whole upload — surface it as
-        # a finding instead so the reviewer knows analysis was incomplete.
         reasons.append(f"Content analysis could not run: {e}")
 
     combined_score = min(combined_score, 100)
@@ -112,25 +111,68 @@ async def upload_document(file: UploadFile = File(...)):
     else:
         status = "Pending"
 
-    record.update({
-        "status": status,
-        "fraud_score": combined_score,
-        "reasons": reasons,
-    })
+    doc = Document(
+        id=doc_id,
+        original_filename=file.filename,
+        stored_filename=saved_filename,
+        status=status,
+        size_bytes=len(contents),
+        fraud_score=combined_score,
+        reasons_json=json.dumps(reasons),
+        ela_image=ela_image,
+        extracted_text=extracted_text,
+        cnn_tamper_probability=cnn_prob,
+        reviewed_by_human=False,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
 
-    DOCUMENTS_DB[doc_id] = record
-
-    return record
+    return _doc_to_dict(doc)
 
 
 @router.get("/{doc_id}")
-def get_document(doc_id: str):
-    record = DOCUMENTS_DB.get(doc_id)
-    if not record:
+def get_document(doc_id: str, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return record
+    return _doc_to_dict(doc)
 
 
 @router.get("/")
-def list_documents():
-    return list(DOCUMENTS_DB.values())
+def list_documents(status: str | None = None, db: Session = Depends(get_db)):
+    """Optionally filter by status, e.g. /api/documents/?status=Flagged for Review"""
+    query = db.query(Document).order_by(Document.uploaded_at.desc())
+    if status:
+        query = query.filter(Document.status == status)
+    return [_doc_to_dict(d) for d in query.all()]
+
+
+class StatusUpdate(BaseModel):
+    status: str
+
+
+@router.patch("/{doc_id}/status")
+def update_status(doc_id: str, update: StatusUpdate, db: Session = Depends(get_db)):
+    """
+    Manual reviewer override — a human can approve, reject, or re-flag a
+    document regardless of the automated fraud_score. The score and
+    findings are preserved either way, since they're the evidence the
+    decision was based on, not a verdict to be erased.
+    """
+    if update.status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {', '.join(VALID_STATUSES)}",
+        )
+
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    doc.status = update.status
+    doc.reviewed_by_human = True
+    db.commit()
+    db.refresh(doc)
+
+    return _doc_to_dict(doc)

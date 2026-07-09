@@ -7,3 +7,4 @@ pytesseract==0.3.13
 PyMuPDF==1.24.10
 torch==2.4.1
 torchvision==0.19.1
+SQLAlchemy==2.0.35

@@ -266,6 +266,149 @@
     font-size: 12px;
     margin-top: 16px;
   }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+  }
+
+  .tab-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: none;
+    border: 1px solid var(--line);
+    border-bottom: none;
+    color: var(--ink-soft);
+    padding: 10px 18px;
+    cursor: pointer;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .tab-btn.active {
+    background: var(--paper-dark);
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .dash-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+
+  .filter-select {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: #fff;
+    color: var(--ink);
+  }
+
+  .refresh-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 8px 14px;
+    border: 1px solid var(--ink);
+    border-radius: var(--radius);
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .refresh-btn:hover { background: var(--paper-dark); }
+
+  .case-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--paper-dark);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .case-table th {
+    text-align: left;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-soft);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .case-table td {
+    padding: 12px 14px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+  }
+
+  .case-table tr:last-child td { border-bottom: none; }
+  .case-table tr:hover td { background: rgba(184, 134, 58, 0.06); }
+  .case-table tr.selected td { background: rgba(184, 134, 58, 0.12); }
+
+  .mini-stamp {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 2px;
+    display: inline-block;
+    border: 1.5px solid var(--stamp-amber);
+    color: var(--stamp-amber);
+  }
+  .mini-stamp.approved { border-color: var(--stamp-green); color: var(--stamp-green); }
+  .mini-stamp.flagged { border-color: var(--stamp-red); color: var(--stamp-red); }
+  .mini-stamp.rejected { border-color: var(--stamp-red); color: var(--stamp-red); background: rgba(155,58,46,0.08); }
+
+  .empty-state {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-soft);
+    text-align: center;
+    padding: 40px 20px;
+  }
+
+  .review-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    grid-column: 1 / -1;
+  }
+
+  .review-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 9px 16px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    border: 1.5px solid var(--ink);
+    background: #fff;
+    color: var(--ink);
+  }
+  .review-btn.approve { border-color: var(--stamp-green); color: var(--stamp-green); }
+  .review-btn.approve:hover { background: rgba(62,107,79,0.08); }
+  .review-btn.reject { border-color: var(--stamp-red); color: var(--stamp-red); }
+  .review-btn.reject:hover { background: rgba(155,58,46,0.08); }
+  .review-btn:hover { background: var(--paper-dark); }
+  .human-reviewed-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-soft);
+    align-self: center;
+    margin-left: 4px;
+  }
 </style>
 </head>
 <body>
@@ -274,8 +417,14 @@
       <h1>Document Intake</h1>
       <span class="case-ref" id="clock"></span>
     </header>
-    <div class="subhead">Phase 1–3 — upload, ELA/EXIF forgery checks, OCR + anachronism detection. Dashboard polish arrives in Phase 5.</div>
+    <div class="subhead">Phases 1–5 — upload, ELA/EXIF + OCR checks, experimental CNN, SQL persistence &amp; reviewer dashboard.</div>
 
+    <div class="tabs">
+      <button class="tab-btn active" id="tabIntakeBtn" onclick="switchTab('intake')">Intake</button>
+      <button class="tab-btn" id="tabDashboardBtn" onclick="switchTab('dashboard')">Review Dashboard</button>
+    </div>
+
+    <div class="view active" id="viewIntake">
     <div class="intake-panel">
       <div class="dropzone" id="dropzone">
         <div class="icon">&#9633;</div>
@@ -325,6 +474,35 @@
           <div class="cap">Trained &amp; validated on synthetic data only — not shown to generalize to real documents. Does not affect the fraud score above.</div>
         </div>
       </div>
+    </div>
+    </div>
+
+    <div class="view" id="viewDashboard">
+      <div class="dash-toolbar">
+        <select class="filter-select" id="statusFilter" onchange="loadDashboard()">
+          <option value="">All statuses</option>
+          <option value="Pending">Pending</option>
+          <option value="Flagged for Review">Flagged for Review</option>
+          <option value="Approved">Approved</option>
+          <option value="Rejected">Rejected</option>
+        </select>
+        <button class="refresh-btn" onclick="loadDashboard()">Refresh</button>
+      </div>
+
+      <table class="case-table" id="caseTable" style="display:none;">
+        <thead>
+          <tr>
+            <th>Filename</th>
+            <th>Score</th>
+            <th>Status</th>
+            <th>Received</th>
+          </tr>
+        </thead>
+        <tbody id="caseTableBody"></tbody>
+      </table>
+      <div class="empty-state" id="dashEmptyState">No documents yet — upload one from the Intake tab.</div>
+
+      <div class="case-file" id="dashCaseFile" style="margin-top:24px;"></div>
     </div>
 
     <footer>Document Fraud Detection API &middot; localhost:8000</footer>
@@ -447,6 +625,147 @@
       document.getElementById('cnnProb').textContent = `${(data.cnn_tamper_probability * 100).toFixed(0)}%`;
     } else {
       cnnPreview.style.display = 'none';
+    }
+  }
+
+  // ---------- Phase 5: Dashboard ----------
+
+  function switchTab(tab) {
+    document.getElementById('viewIntake').classList.toggle('active', tab === 'intake');
+    document.getElementById('viewDashboard').classList.toggle('active', tab === 'dashboard');
+    document.getElementById('tabIntakeBtn').classList.toggle('active', tab === 'intake');
+    document.getElementById('tabDashboardBtn').classList.toggle('active', tab === 'dashboard');
+    if (tab === 'dashboard') loadDashboard();
+  }
+
+  function statusClass(status) {
+    if (status === 'Approved') return 'approved';
+    if (status === 'Flagged for Review') return 'flagged';
+    if (status === 'Rejected') return 'rejected';
+    return '';
+  }
+
+  let currentCases = [];
+
+  async function loadDashboard() {
+    const filter = document.getElementById('statusFilter').value;
+    const url = filter
+      ? `${API_BASE}/api/documents/?status=${encodeURIComponent(filter)}`
+      : `${API_BASE}/api/documents/`;
+
+    try {
+      const res = await fetch(url);
+      currentCases = await res.json();
+    } catch (err) {
+      document.getElementById('dashEmptyState').textContent = 'Could not reach the API. Is the backend running on localhost:8000?';
+      document.getElementById('dashEmptyState').style.display = 'block';
+      document.getElementById('caseTable').style.display = 'none';
+      return;
+    }
+
+    const table = document.getElementById('caseTable');
+    const tbody = document.getElementById('caseTableBody');
+    const emptyState = document.getElementById('dashEmptyState');
+
+    if (currentCases.length === 0) {
+      table.style.display = 'none';
+      emptyState.style.display = 'block';
+      emptyState.textContent = 'No documents yet — upload one from the Intake tab.';
+      document.getElementById('dashCaseFile').innerHTML = '';
+      document.getElementById('dashCaseFile').classList.remove('active');
+      return;
+    }
+
+    table.style.display = 'table';
+    emptyState.style.display = 'none';
+
+    tbody.innerHTML = currentCases.map(doc => `
+      <tr onclick="showCaseDetail('${doc.id}')">
+        <td>${doc.original_filename}</td>
+        <td>${doc.fraud_score !== null ? doc.fraud_score + ' / 100' : '—'}</td>
+        <td><span class="mini-stamp ${statusClass(doc.status)}">${doc.status}</span></td>
+        <td>${doc.uploaded_at ? doc.uploaded_at.replace('T',' ').slice(0,16) : '—'}</td>
+      </tr>
+    `).join('');
+  }
+
+  function showCaseDetail(docId) {
+    const doc = currentCases.find(d => d.id === docId);
+    if (!doc) return;
+
+    const container = document.getElementById('dashCaseFile');
+    container.classList.add('active');
+
+    const isImage = /\.(jpg|jpeg|png)$/i.test(doc.stored_filename);
+    const previewHtml = isImage
+      ? `<img src="${API_BASE}/uploads/${doc.stored_filename}" alt="preview" />`
+      : `<div style="font-family:'IBM Plex Mono',monospace;color:var(--ink-soft);text-align:center;"><div style="font-size:28px;margin-bottom:8px;">&#9633;</div>PDF — see extracted text below</div>`;
+
+    const scoreColor = doc.fraud_score >= 50 ? 'var(--stamp-red)' : (doc.fraud_score < 20 ? 'var(--stamp-green)' : 'var(--stamp-amber)');
+
+    container.innerHTML = `
+      <div class="doc-preview">${previewHtml}</div>
+      <div class="doc-meta">
+        <div class="meta-row"><span class="k">Case ID</span><span class="v">${doc.id}</span></div>
+        <div class="meta-row"><span class="k">Filename</span><span class="v">${doc.original_filename}</span></div>
+        <div class="meta-row"><span class="k">Size</span><span class="v">${(doc.size_bytes/1024).toFixed(1)} KB</span></div>
+        <div class="meta-row"><span class="k">Received</span><span class="v">${(doc.uploaded_at||'').replace('T',' ').slice(0,19)} UTC</span></div>
+        ${doc.fraud_score !== null ? `
+        <div class="score-row">
+          <span class="k" style="display:block;text-transform:uppercase;letter-spacing:0.05em;font-size:10px;color:var(--ink-soft);margin-bottom:2px;">Fraud Score</span>
+          <span class="v">${doc.fraud_score} / 100</span>
+          <div class="score-bar-track"><div class="score-bar-fill" style="width:${doc.fraud_score}%;background:${scoreColor};"></div></div>
+        </div>` : ''}
+        <div class="stamp ${statusClass(doc.status)}">${doc.status}</div>
+      </div>
+
+      ${doc.reasons && doc.reasons.length ? `
+      <div class="reasons-panel">
+        <h3>Findings</h3>
+        <div>${doc.reasons.map(r => `<div class="reason-item">${r}</div>`).join('')}</div>
+      </div>` : ''}
+
+      ${doc.ela_image ? `
+      <div class="ela-preview">
+        <h3 style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);margin:0 0 10px;">ELA Overlay</h3>
+        <img src="${API_BASE}/uploads/${doc.ela_image}" alt="ELA visualization" />
+      </div>` : ''}
+
+      ${doc.extracted_text ? `
+      <div class="ela-preview">
+        <h3 style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);margin:0 0 10px;">Extracted Text (OCR)</h3>
+        <pre style="font-family:'IBM Plex Mono',monospace;font-size:12px;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px;white-space:pre-wrap;word-break:break-word;margin:0;">${doc.extracted_text}</pre>
+      </div>` : ''}
+
+      <div class="review-actions">
+        <button class="review-btn approve" onclick="overrideStatus('${doc.id}', 'Approved')">Approve</button>
+        <button class="review-btn reject" onclick="overrideStatus('${doc.id}', 'Rejected')">Reject</button>
+        <button class="review-btn" onclick="overrideStatus('${doc.id}', 'Flagged for Review')">Re-flag</button>
+        ${doc.reviewed_by_human ? '<span class="human-reviewed-tag">&#10003; reviewed by a human</span>' : ''}
+      </div>
+    `;
+
+    document.querySelectorAll('#caseTableBody tr').forEach(tr => tr.classList.remove('selected'));
+    const idx = currentCases.findIndex(d => d.id === docId);
+    if (idx >= 0) document.querySelectorAll('#caseTableBody tr')[idx].classList.add('selected');
+  }
+
+  async function overrideStatus(docId, newStatus) {
+    try {
+      const res = await fetch(`${API_BASE}/api/documents/${docId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.detail || 'Could not update status');
+        return;
+      }
+      await loadDashboard();
+      showCaseDetail(docId);
+    } catch (err) {
+      alert('Could not reach the API.');
     }
   }
 </script>

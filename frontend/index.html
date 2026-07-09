@@ -316,6 +316,14 @@
           <h3 style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);margin:0 0 10px;">Extracted Text (OCR)</h3>
           <pre id="extractedText" style="font-family:'IBM Plex Mono',monospace;font-size:12px;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px;white-space:pre-wrap;word-break:break-word;margin:0;"></pre>
         </div>
+
+        <div class="ela-preview" id="cnnPreview" style="display:none;">
+          <h3 style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--ink-soft);margin:0 0 10px;">CNN Classifier (Experimental)</h3>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:13px;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px;">
+            Tampering probability: <strong id="cnnProb">—</strong>
+          </div>
+          <div class="cap">Trained &amp; validated on synthetic data only — not shown to generalize to real documents. Does not affect the fraud score above.</div>
+        </div>
       </div>
     </div>
 
@@ -431,6 +439,14 @@
       document.getElementById('extractedText').textContent = data.extracted_text;
     } else {
       textPreview.style.display = 'none';
+    }
+
+    const cnnPreview = document.getElementById('cnnPreview');
+    if (data.cnn_tamper_probability !== null && data.cnn_tamper_probability !== undefined) {
+      cnnPreview.style.display = 'block';
+      document.getElementById('cnnProb').textContent = `${(data.cnn_tamper_probability * 100).toFixed(0)}%`;
+    } else {
+      cnnPreview.style.display = 'none';
     }
   }
 </script>

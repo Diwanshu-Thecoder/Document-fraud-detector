@@ -1,11 +1,16 @@
 """
 Endpoints for uploading and inspecting documents.
 
-Phase 3: adds OCR + NLP consistency checks (content_analysis) alongside the
-Phase 2 image forgery checks (forgery_detection), and combines both into a
-single fraud_score. PDFs now get analyzed too (via OCR), though image-level
-forgery checks (ELA/EXIF) remain image-only since they need pixel data,
-not PDF structure.
+Phase 4: adds a CNN tampering classifier (cnn_inference) alongside the
+Phase 2/3 checks. IMPORTANT: the CNN's score is surfaced to the reviewer
+but deliberately NOT included in fraud_score. It scored 95% val accuracy
+on its own synthetic training distribution, but testing on even slightly
+different-looking synthetic documents showed it collapses to predicting
+"tampered" on almost everything — a textbook case of a model that learned
+its narrow training distribution well but doesn't generalize (domain
+shift). See ml/README or backend/app/services/cnn_inference.py for detail.
+An unreliable signal shouldn't get to outvote the more trustworthy
+EXIF/anachronism evidence, so it stays informational-only for now.
 """
 import os
 import uuid
@@ -15,6 +20,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from app.services.forgery_detection import analyze_document
 from app.services.content_analysis import analyze_content
+from app.services.cnn_inference import classify_tampering
 
 router = APIRouter()
 
@@ -58,6 +64,7 @@ async def upload_document(file: UploadFile = File(...)):
         "reasons": [],
         "ela_image": None,
         "extracted_text": None,
+        "cnn_tamper_probability": None,
     }
 
     reasons: list[str] = []
@@ -70,6 +77,20 @@ async def upload_document(file: UploadFile = File(...)):
         reasons.extend(forgery_report.reasons)
         combined_score += forgery_report.fraud_score
         record["ela_image"] = forgery_report.ela_image_path
+
+        # --- CNN tampering classifier — experimental, does NOT affect score ---
+        try:
+            cnn_result = classify_tampering(saved_path)
+            record["cnn_tamper_probability"] = cnn_result["tampered_probability"]
+            reasons.append(
+                f"[Experimental] CNN classifier estimates "
+                f"{cnn_result['tampered_probability']*100:.0f}% tampering probability. "
+                f"This model was trained/validated only on synthetic data and has NOT "
+                f"been shown to generalize to real documents — informational only, "
+                f"not included in the fraud score."
+            )
+        except Exception as e:
+            reasons.append(f"CNN classifier could not run: {e}")
 
     # --- Content checks (OCR + NLP) — images and PDFs ---
     try:
